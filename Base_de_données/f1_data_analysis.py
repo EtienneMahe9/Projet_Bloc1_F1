@@ -397,158 +397,196 @@ def create_mongodb_connection():
         print(f"✗ Erreur de connexion MongoDB: {e}")
         return None, None
 
-def print_mongodb_stats(collection):
-    """Affiche les statistiques de la collection MongoDB."""
-    print("\nStatistiques de la base de données MongoDB:")
+def print_collection_stats(collection):
+    """Analyse une collection MongoDB de données F1 et génère des statistiques détaillées"""
+    print("\nStatistiques de la base de données:")
     
-    # Nombre de courses par année (en comptant les courses uniques)
-    pipeline = [
-        {
-            "$group": {
-                "_id": {
-                    "year": "$year",
-                    "race_name": "$race_name"  # Grouper par année et nom de course
-                }
-            }
-        },
-        {
-            "$group": {
-                "_id": "$_id.year",
-                "count": {"$sum": 1}  # Compter les courses uniques
-            }
-        },
-        {"$sort": {"_id": 1}}  # Trier par année
-    ]
+    # Nombre de courses par année
+    print("\nNombre de courses par année:")
+    # Récupération des documents groupés par année
+    courses_par_annee = {}
+    for document in collection.find():
+        annee = document.get('year')
+        nom_course = document.get('race_name')
+        
+        # Créer une clé unique année+course pour éviter les doublons
+        cle_unique = f"{annee}_{nom_course}"
+        
+        if annee not in courses_par_annee:
+            courses_par_annee[annee] = set()
+        
+        courses_par_annee[annee].add(cle_unique)
     
-    print("Nombre de courses par année:")
-    for result in collection.aggregate(pipeline):
-        print(f"Année {result['_id']}: {result['count']} courses")
-
+    # Affichage des résultats triés par année
+    for annee in sorted(courses_par_annee.keys()):
+        nombre_courses = len(courses_par_annee[annee])
+        print(f"Année {annee}: {nombre_courses} courses")
+    
     # Circuits uniques
-    pipeline = [
-        {
-            "$group": {
-                "_id": "$circuit"
-            }
-        }
-    ]
-    n_circuits = len(list(collection.aggregate(pipeline)))
+    print("\nCircuits uniques:")
+    circuits_uniques = set()
+    
+    # Récupération de tous les circuits
+    for document in collection.find():
+        circuit = document.get('circuit')
+        if circuit:
+            circuits_uniques.add(circuit)
+    
+    n_circuits = len(circuits_uniques)
     print(f"\nNombre de circuits uniques: {n_circuits}")
-
+    
     # Pilotes uniques
-    pipeline = [
-        {
-            "$group": {
-                "_id": "$driver"
-            }
-        }
-    ]
-    n_drivers = len(list(collection.aggregate(pipeline)))
+    print("\nPilotes uniques:")
+    pilotes_uniques = set()
+    
+    # Récupération de tous les pilotes
+    for document in collection.find():
+        pilote = document.get('driver')
+        if pilote:
+            pilotes_uniques.add(pilote)
+    
+    n_drivers = len(pilotes_uniques)
     print(f"Nombre de pilotes uniques: {n_drivers}")
 
-def get_performance_by_circuit(collection, circuit_name):
-    """Analyse des performances sur un circuit spécifique à partir de 2021."""
+def get_performance_by_circuit_simple(collection, circuit_name):
+    """Analyse des performances sur un circuit spécifique sans pipeline."""
     print(f"\nAnalyse des performances sur le circuit: {circuit_name}")
-    pipeline = [
-        {
-            "$match": {
-                "circuit": circuit_name,
-                "year": {"$gte": 2021}  # Filtrer pour les années >= 2021
-            }
-        },
-        {
-            "$group": {
-                "_id": {
-                    "year": "$year",
-                    "race_name": "$race_name"
-                },
-                "avg_speed": {"$avg": "$performance.speeds.avg"},
-                "max_speed": {"$max": "$performance.speeds.max"},
-                "avg_rpm": {"$avg": "$performance.engine.avg_rpm"},
-                "best_lap_time": {"$min": "$performance.best_lap_time"}
-            }
-        },
-        {
-            "$project": {
-                "year": "$_id.year",
-                "avg_speed": 1,
-                "max_speed": 1,
-                "avg_rpm": 1,
-                "best_lap_time": 1,
-                "_id": 0
-            }
-        },
-        {"$sort": {"year": 1}}
-    ]
-    results = list(collection.aggregate(pipeline))
-    if results:
-        df = pd.DataFrame(results)
-        print(df)
-        
-        # Visualisation
-        fig = px.line(df, 
-                      x="year", 
-                      y=["avg_speed", "max_speed"], 
-                      title=f"Évolution des performances sur {circuit_name}")
-        fig.update_layout(yaxis_title="Vitesse (km/h)")
-        fig.write_html(f"circuit_{circuit_name.replace(' ', '_')}.html")
-        print(f"✓ Visualisation pour le circuit '{circuit_name}' créée")
-    else:
+    
+    # Filtrer les documents pour le circuit spécifique et les années >= 2021
+    filtered_docs = []
+    for doc in collection.find({"circuit": circuit_name}):
+        if doc.get("year") and doc.get("year") >= 2021:
+            filtered_docs.append(doc)
+    
+    if not filtered_docs:
         print(f"Aucune donnée disponible pour {circuit_name}")
-
-def analyze_weather_impact(collection):
-    """Analyse de l'impact des conditions météo sur les performances."""
-    print("\nAnalyse de l'impact des conditions météorologiques:")
-    pipeline = [
-        {
-            "$group": {
-                "_id": {
-                    "year": "$year",
-                    "race_name": "$race_name",
-                    "weather_condition": {
-                        "$cond": [
-                            {"$gt": ["$weather.precipitation", 0]},
-                            "Pluie",
-                            "Sec"
-                        ]
-                    }
-                },
-                "avg_speed": {"$avg": "$performance.speeds.avg"}
-            }
-        },
-        {
-            "$group": {
-                "_id": "$_id.weather_condition",
-                "avg_speed": {"$avg": "$avg_speed"},
-                "races_count": {"$sum": 1}
-            }
-        }
-    ]
-    results = list(collection.aggregate(pipeline))
-    if results:
-        df = pd.DataFrame(results).rename(columns={"_id": "weather_condition"})
-        print(df)
+        return
+    
+    # Regrouper par année et race_name
+    grouped_data = {}
+    for doc in filtered_docs:
+        year = doc.get("year")
+        race_name = doc.get("race_name")
+        key = f"{year}_{race_name}"
         
-        # Visualisation
-        fig = px.bar(df, 
-                     x="weather_condition", 
-                     y="avg_speed",
-                     text="races_count",
-                     title="Impact des conditions météo sur la vitesse moyenne",
-                     labels={"weather_condition": "Conditions", 
-                             "avg_speed": "Vitesse moyenne (km/h)",
-                             "races_count": "Nombre de courses"})
-        fig.update_traces(texttemplate='%{text} courses', textposition='outside')
-        fig.write_html("mongodb_weather_impact.html")
-        print("✓ Visualisation 'Impact météo (MongoDB)' créée")
-    else:
-        print("Aucune donnée disponible pour l'analyse météo")
+        if key not in grouped_data:
+            grouped_data[key] = {
+                "year": year,
+                "race_name": race_name,
+                "speeds": [],
+                "max_speeds": [],
+                "rpm_values": [],
+                "lap_times": []
+            }
+        
+        # Extraire les données de performance
+        if "performance" in doc:
+            perf = doc["performance"]
+            if "speeds" in perf and "avg" in perf["speeds"]:
+                grouped_data[key]["speeds"].append(perf["speeds"]["avg"])
+            if "speeds" in perf and "max" in perf["speeds"]:
+                grouped_data[key]["max_speeds"].append(perf["speeds"]["max"])
+            if "engine" in perf and "avg_rpm" in perf["engine"]:
+                grouped_data[key]["rpm_values"].append(perf["engine"]["avg_rpm"])
+            if "best_lap_time" in perf:
+                grouped_data[key]["lap_times"].append(perf["best_lap_time"])
+    
+    # Calculer les moyennes et minimums pour chaque groupe
+    results = []
+    for key, data in grouped_data.items():
+        avg_speed = sum(data["speeds"]) / len(data["speeds"]) if data["speeds"] else None
+        max_speed = max(data["max_speeds"]) if data["max_speeds"] else None
+        avg_rpm = sum(data["rpm_values"]) / len(data["rpm_values"]) if data["rpm_values"] else None
+        best_lap = min(data["lap_times"]) if data["lap_times"] else None
+        
+        results.append({
+            "year": data["year"],
+            "avg_speed": avg_speed,
+            "max_speed": max_speed,
+            "avg_rpm": avg_rpm,
+            "best_lap_time": best_lap
+        })
+    
+    # Trier par année
+    results.sort(key=lambda x: x["year"])
+    
+    # Conversion en dataframe et affichage
+    df = pd.DataFrame(results)
+    print(df)
+    
+    # Visualisation
+    fig = px.line(df, 
+                  x="year", 
+                  y=["avg_speed", "max_speed"], 
+                  title=f"Évolution des performances sur {circuit_name}")
+    fig.update_layout(yaxis_title="Vitesse (km/h)")
+    fig.write_html(f"circuit_{circuit_name.replace(' ', '_')}.html")
+    print(f"✓ Visualisation pour le circuit '{circuit_name}' créée")
 
-def combined_analysis(mysql_conn, mongo_collection):
-    """Analyse combinée des données MySQL et MongoDB."""
+def analyze_weather_impact_simple(collection):
+    """Analyse de l'impact des conditions météo sur les performances sans pipeline."""
+    print("\nAnalyse de l'impact des conditions météorologiques:")
+    
+    # Récupérer et filtrer tous les documents avec données météo et performance
+    weather_data = {
+        "Pluie": {"speeds": [], "count": 0},
+        "Sec": {"speeds": [], "count": 0}
+    }
+    
+    for doc in collection.find():
+        # Vérifier si le document a les informations nécessaires
+        if not (doc.get("weather") and doc.get("performance") and 
+                "speeds" in doc["performance"] and "avg" in doc["performance"]["speeds"]):
+            continue
+        
+        # Déterminer la condition météo
+        precipitation = doc["weather"].get("precipitation", 0)
+        condition = "Pluie" if precipitation and precipitation > 0 else "Sec"
+        
+        # Ajouter la vitesse moyenne
+        avg_speed = doc["performance"]["speeds"]["avg"]
+        if avg_speed:
+            weather_data[condition]["speeds"].append(avg_speed)
+            weather_data[condition]["count"] += 1
+    
+    # Calculer les moyennes
+    results = []
+    for condition, data in weather_data.items():
+        if data["speeds"]:
+            avg_speed = sum(data["speeds"]) / len(data["speeds"])
+            results.append({
+                "weather_condition": condition,
+                "avg_speed": avg_speed,
+                "races_count": data["count"]
+            })
+    
+    if not results:
+        print("Aucune donnée disponible pour l'analyse météo")
+        return
+    
+    # Conversion en dataframe
+    df = pd.DataFrame(results)
+    print(df)
+    
+    # Visualisation
+    fig = px.bar(df, 
+                 x="weather_condition", 
+                 y="avg_speed",
+                 text="races_count",
+                 title="Impact des conditions météo sur la vitesse moyenne",
+                 labels={"weather_condition": "Conditions", 
+                         "avg_speed": "Vitesse moyenne (km/h)",
+                         "races_count": "Nombre de courses"})
+    fig.update_traces(texttemplate='%{text} courses', textposition='outside')
+    fig.write_html("mongodb_weather_impact.html")
+    print("✓ Visualisation 'Impact météo (MongoDB)' créée")
+
+def combined_analysis_simple(mysql_conn, mongo_collection):
+    """Analyse combinée des données MySQL et MongoDB sans pipeline."""
     print("\nAnalyse combinée MySQL et MongoDB:")
     
     # Récupérer les données de courses récentes de MySQL
+    mysql_data = None
     if mysql_conn and mysql_conn.is_connected():
         recent_races_query = """
         SELECT 
@@ -571,38 +609,62 @@ def combined_analysis(mysql_conn, mongo_collection):
         print("✓ Données MySQL exportées vers mysql_recent_races.csv")
     
     # Récupérer des statistiques de performance de MongoDB
+    mongo_data = None
     if mongo_collection:
-        pipeline = [
-            {
-                "$match": {"year": {"$gte": 2021}}
-            },
-            {
-                "$group": {
-                    "_id": {
-                        "circuit": "$circuit"
-                    },
-                    "avg_performance": {"$avg": "$performance.speeds.avg"},
-                    "races_count": {"$sum": 1}
+        # Filtrer et traiter manuellement
+        circuit_performances = {}
+        for doc in mongo_collection.find():
+            # Vérifier l'année
+            if not doc.get("year") or doc.get("year") < 2021:
+                continue
+                
+            # Extraire le circuit
+            circuit = doc.get("circuit")
+            if not circuit:
+                continue
+                
+            # Extraire la performance
+            performance = 0
+            if (doc.get("performance") and 
+                doc["performance"].get("speeds") and 
+                doc["performance"]["speeds"].get("avg")):
+                performance = doc["performance"]["speeds"]["avg"]
+            else:
+                continue
+                
+            # Ajouter aux données
+            if circuit not in circuit_performances:
+                circuit_performances[circuit] = {
+                    "performances": [],
+                    "count": 0
                 }
-            },
-            {
-                "$project": {
-                    "circuit": "$_id.circuit",
-                    "avg_performance": 1,
-                    "races_count": 1,
-                    "_id": 0
-                }
-            },
-            {"$sort": {"avg_performance": -1}}
-        ]
-        mongo_data = pd.DataFrame(list(mongo_collection.aggregate(pipeline)))
-        if not mongo_data.empty:
+            
+            circuit_performances[circuit]["performances"].append(performance)
+            circuit_performances[circuit]["count"] += 1
+        
+        # Calculer les moyennes
+        mongo_results = []
+        for circuit, data in circuit_performances.items():
+            if data["performances"]:
+                avg_performance = sum(data["performances"]) / len(data["performances"])
+                mongo_results.append({
+                    "circuit": circuit,
+                    "avg_performance": avg_performance,
+                    "races_count": data["count"]
+                })
+        
+        # Trier par performance moyenne
+        mongo_results.sort(key=lambda x: x["avg_performance"], reverse=True)
+        
+        # Conversion en dataframe
+        if mongo_results:
+            mongo_data = pd.DataFrame(mongo_results)
             print(f"Données MongoDB récupérées: {len(mongo_data)} circuits")
             mongo_data.to_csv("mongodb_circuit_performance.csv", index=False)
             print("✓ Données MongoDB exportées vers mongodb_circuit_performance.csv")
             
             # Visualisation combinée si les deux sources sont disponibles
-            if 'mysql_data' in locals() and not mysql_data.empty:
+            if mysql_data is not None and not mysql_data.empty:
                 print("Création d'une visualisation combinée...")
                 # Visualisation à titre d'exemple
                 fig = go.Figure()
@@ -666,13 +728,14 @@ def main():
         if args.mode in ['mongodb', 'all']:
             mongo_client, mongo_collection = create_mongodb_connection()
             if mongo_collection:
-                print_mongodb_stats(mongo_collection)
-                get_performance_by_circuit(mongo_collection, args.circuit)
-                analyze_weather_impact(mongo_collection)
+                # Utiliser la version simplifiée sans pipeline
+                print_collection_stats(mongo_collection)
+                get_performance_by_circuit_simple(mongo_collection, args.circuit)
+                analyze_weather_impact_simple(mongo_collection)
         
         # Analyse combinée si les deux modes sont actifs
         if args.mode == 'all' and mysql_conn and mongo_collection:
-            combined_analysis(mysql_conn, mongo_collection)
+            combined_analysis_simple(mysql_conn, mongo_collection)
             
         print("\n✓ Analyse terminée. Les fichiers de visualisation HTML ont été créés.")
         
