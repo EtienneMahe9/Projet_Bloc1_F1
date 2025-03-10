@@ -501,7 +501,7 @@ def main():
     # Exemple d'utilisation
     print(f"Collecte des données F1 pour les années: {', '.join(map(str, years))}")
     
-    # Collection factice pour test
+    # Test
     test_collection = [
         {
             'year': 2022, 
